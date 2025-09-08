@@ -97,10 +97,13 @@ public class OpenRtbController {
                         .handle((res, err) -> {
                             final boolean dropped = (err != null);
                             final int status = dropped ? 0 : res.status();
-                            final String respBody = dropped ? "" : res.body();
                             final int durMs = (int) TimeUnit.NANOSECONDS
                                     .toMillis(System.nanoTime() - start);
-                            publisher.publishResponse(reqUuid, tgt.url, status, durMs, dropped, respBody);
+
+                            final String respBody = dropped ? "" : res.body();
+                            // keep only id + took_ms to ClickHouse
+                            final String compact = dropped ? "" : extractIdAndTook(respBody);
+                            publisher.publishResponse(reqUuid, tgt.url, status, durMs, dropped, compact);
                             return res;
                         });
 
@@ -115,6 +118,36 @@ public class OpenRtbController {
                     .header("X-Ack", "waited")
                     .build();
         }
+    }
+    private static String extractIdAndTook(String s) {
+        if (s == null || s.isEmpty()) return "";
+        String id = fastString(s, "\"id\"");
+        int took = fastInt(s, "\"took_ms\"");
+        if (id == null && took < 0) return "";
+        StringBuilder sb = new StringBuilder(48).append('{');
+        boolean first = true;
+        if (id != null) { sb.append("\"id\":\"").append(id).append('"'); first = false; }
+        if (took >= 0) { if (!first) sb.append(','); sb.append("\"took_ms\":").append(took); }
+        sb.append('}');
+        return sb.toString();
+    }
+    private static String fastString(String s, String key) {
+        int i = s.indexOf(key); if (i < 0) return null;
+        i = s.indexOf(':', i); if (i < 0) return null; i++;
+        while (i < s.length() && Character.isWhitespace(s.charAt(i))) i++;
+        if (i >= s.length() || s.charAt(i) != '"') return null;
+        i++;
+        int j = i;
+        while (j < s.length() && s.charAt(j) != '"') j++;
+        return (j <= s.length()) ? s.substring(i, j) : null;
+    }
+    private static int fastInt(String s, String key) {
+        int i = s.indexOf(key); if (i < 0) return -1;
+        i = s.indexOf(':', i); if (i < 0) return -1; i++;
+        while (i < s.length() && !Character.isDigit(s.charAt(i))) i++;
+        int start = i, val = 0;
+        while (i < s.length() && Character.isDigit(s.charAt(i))) { val = val * 10 + (s.charAt(i) - '0'); i++; }
+        return (i == start) ? -1 : val;
     }
 
     private void fanoutAndLog(UUID reqUuid, byte[] body, int tmaxMs) {
