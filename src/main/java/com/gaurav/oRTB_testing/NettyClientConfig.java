@@ -25,14 +25,12 @@ public class NettyClientConfig {
 
         return new PooledHttpClient(
                 clientGroup, ch,
-                // capture body cap (system property or default 0)
-                Integer.getInteger("resp.max.bytes", 0),
-                // aggregate only small bodies (system property or default 8192)
-                Integer.getInteger("netty.client.aggMaxBytes", 8192),
-                Integer.getInteger("netty.connect.ms", 100),
-                Integer.getInteger("netty.pool.maxPerHost", 2000),
-                Integer.getInteger("netty.pool.maxPending", 50000),
-                Long.getLong("netty.pool.acquireTimeoutMs", 150L)
+                Integer.getInteger("resp.max.bytes", 256),     // tiny capture
+                Integer.getInteger("netty.client.aggMaxBytes", 4096),
+                Integer.getInteger("netty.connect.ms", 60),
+                Integer.getInteger("netty.pool.maxPerHost", 200),
+                Integer.getInteger("netty.pool.maxPending", 1000),
+                Long.getLong("netty.pool.acquireTimeoutMs", 50)
         );
     }
 }

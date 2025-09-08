@@ -79,12 +79,14 @@ services:
 
       # Netty/system props (picked up by PooledHttpClient)
       JAVA_TOOL_OPTIONS: >-
-        -Dnetty.pool.maxPerHost=4000
-        -Dnetty.pool.maxPending=50000
-        -Dnetty.pool.acquireTimeoutMs=150
-        -Dnetty.client.aggMaxBytes=8192
-        -Dnetty.connect.ms=100
+        -Dnetty.pool.maxPerHost=200
+        -Dnetty.pool.maxPending=1000
+        -Dnetty.pool.acquireTimeoutMs=50
+        -Dnetty.client.aggMaxBytes=4096
+        -Dnetty.connect.ms=60
         -Dresp.max.bytes=256
+        -Dauction.maxInflight=2000
+        -Dupstream.maxInflight=8000
         -XX:+UseG1GC -XX:MaxGCPauseMillis=50
     restart: unless-stopped
 
