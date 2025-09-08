@@ -57,10 +57,11 @@ services:
     container_name: rtb-app
     ports:
       - "8080:8080"
+    network_mode: "host"
     # DO NOT use host network on Mac
     environment:
       # Talk to sibling containers by service name
-      KAFKA_BOOTSTRAP: kafka:29092
+      KAFKA_BOOTSTRAP: localhost:9094
       KAFKA_TOPIC_REQUESTS: rtb_requests
       KAFKA_TOPIC_RESPONSES: rtb_responses
       KAFKA_ACKS: "0"
@@ -69,7 +70,7 @@ services:
       KAFKA_LINGERMS: "5"
 
       # ClickHouse via service name + async insert + short timeouts
-      CLICKHOUSE_URL: jdbc:ch://clickhouse:8123/default?async_insert=1&wait_for_async_insert=0&compress=1&decompress=1&socket_timeout=5000&connection_timeout=3000
+      CLICKHOUSE_URL: jdbc:ch://localhost:8123/default?async_insert=1&wait_for_async_insert=0&compress=1&decompress=1&socket_timeout=5000&connection_timeout=3000
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: topSecretPassword
 
@@ -84,13 +85,13 @@ services:
 
       # Netty / client tuning (small aggregator & capture)
       JAVA_TOOL_OPTIONS: >-
-        -Xms768m -Xmx768m
-        -Dnetty.pool.maxPerHost=200
-        -Dnetty.pool.maxPending=800
-        -Dnetty.pool.acquireTimeoutMs=50
-        -Dnetty.client.aggMaxBytes=4096
-        -Dnetty.connect.ms=60
-        -Dresp.max.bytes=256
+        -Djava.net.preferIPv4Stack=true
+        -Dnetty.pool.maxPerHost=4000
+        -Dnetty.pool.maxPending=50000
+        -Dnetty.pool.acquireTimeoutMs=150
+        -Dnetty.client.aggMaxBytes=262144
+        -Dnetty.connect.ms=100
+        -Dresp.max.bytes=65536
         -XX:+UseG1GC -XX:MaxGCPauseMillis=50
     depends_on:
       kafka:
