@@ -19,23 +19,20 @@ public class NettyClientConfig {
         return new NioEventLoopGroup();
     }
 
+    // NettyClientConfig.java
     @Bean(destroyMethod = "close")
-    public PooledHttpClient pooledHttpClient(
-            EventLoopGroup clientGroup,
-            @Value("${resp.max.bytes:65536}") int respMaxBytes,
-            @Value("${netty.client.aggMaxBytes:65536}") int aggMaxBytes,
-            @Value("${netty.connect.ms:80}") int connectMs,
-            @Value("${netty.pool.maxPerHost:4000}") int maxPerHost,
-            @Value("${netty.pool.maxPending:20000}") int maxPending,
-            @Value("${netty.pool.acquireTimeoutMs:2}") long acquireTimeoutMs
-    ) {
+    public PooledHttpClient pooledHttpClient(EventLoopGroup clientGroup) {
         Class<? extends io.netty.channel.Channel> ch =
                 Epoll.isAvailable() ? EpollSocketChannel.class : NioSocketChannel.class;
 
         return new PooledHttpClient(
                 clientGroup, ch,
-                respMaxBytes, aggMaxBytes, connectMs,
-                maxPerHost, maxPending, acquireTimeoutMs
+                Integer.getInteger("resp.max.bytes", 65536),            // capture body cap
+                Integer.getInteger("netty.client.aggMaxBytes", 262144), // aggregator
+                Integer.getInteger("netty.connect.ms", 100),            // connect timeout
+                Integer.getInteger("netty.pool.maxPerHost", 2000),      // pool size / host
+                Integer.getInteger("netty.pool.maxPending", 50000),     // pending acquires
+                Long.getLong("netty.pool.acquireTimeoutMs", 150)        // <-- key change
         );
     }
 }
