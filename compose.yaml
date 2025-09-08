@@ -91,7 +91,7 @@ services:
       JAVA_TOOL_OPTIONS: >-
         -Dnetty.pool.maxPerHost=4000
         -Dnetty.pool.maxPending=50000
-        -Dnetty.pool.acquireTimeoutMs=150   # ⬅️ was 2; make 150–200
+        -Dnetty.pool.acquireTimeoutMs=150
         -Dnetty.client.aggMaxBytes=262144
         -Dnetty.connect.ms=100
         -Dresp.max.bytes=65536
