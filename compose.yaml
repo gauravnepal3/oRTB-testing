@@ -72,7 +72,7 @@ services:
       CLICKHOUSE_PASSWORD: topSecretPassword
 
       EXTERNAL_TARGETS: "http://localhost:9100/bid,http://localhost:9101/bid,http://localhost:9102/bid,http://localhost:9103/bid,http://localhost:9104/bid"
-      FANOUT_COUNT: "5"
+      FANOUT_COUNT: "10"
       FANOUT_TOTALTIMEOUTMS: "300"
       AUCTION_IMMEDIATEACK: "true"
       SPRING_THREADS_VIRTUAL_ENABLED: "true"
