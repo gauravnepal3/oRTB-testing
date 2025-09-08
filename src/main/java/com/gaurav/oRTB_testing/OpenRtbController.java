@@ -2,10 +2,8 @@ package com.gaurav.oRTB_testing;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -19,24 +17,25 @@ import java.util.concurrent.*;
 public class OpenRtbController {
     private static final ObjectMapper M = new ObjectMapper();
 
-    private final PooledHttpClient http;          // Netty client
-    private final List<Target> targets;           // host/port/path
+    private final PooledHttpClient http;
+    private final List<Target> targets;
     private final int defaultFanout;
     private final int totalTimeoutMs;
     private final NonBlockingKafkaPublisher publisher;
 
-    private final  ExecutorService vexec;
-    // at class level
+    private final ExecutorService vexec;
+
     @Value("${auction.immediateAck:true}")
     private boolean immediateAck;
 
     public OpenRtbController(
             @Qualifier("vthreadExecutor") ExecutorService vexec,
             PooledHttpClient http,
-                             NonBlockingKafkaPublisher publisher,
-                             @Value("${external.targets}") String targetsCsv,
-                             @Value("${fanout.count:5}") int defaultFanout,
-                             @Value("${fanout.totalTimeoutMs:300}") int totalTimeoutMs) {
+            NonBlockingKafkaPublisher publisher,
+            @Value("${external.targets}") String targetsCsv,
+            @Value("${fanout.count:5}") int defaultFanout,
+            @Value("${fanout.totalTimeoutMs:300}") int totalTimeoutMs) {
+
         this.vexec = vexec;
         this.http = http;
         this.defaultFanout = defaultFanout;
@@ -62,31 +61,27 @@ public class OpenRtbController {
         this.targets = Collections.unmodifiableList(t);
     }
 
-    // put this static scheduler at class level (not inside the method)
     private static final ScheduledExecutorService DEADLINE_SCHED =
             Executors.newScheduledThreadPool(
                     Math.max(1, Runtime.getRuntime().availableProcessors() / 4),
                     r -> { Thread t = new Thread(r, "deadline-sched"); t.setDaemon(true); return t; }
             );
 
-
     @PostMapping(path = "/auction", consumes = "application/json")
     public ResponseEntity<Void> auction(@RequestBody byte[] body) {
         final int tmaxMs = quickTmax(body, totalTimeoutMs);
-        final String openrtbId = quickId(body);
+        // HOT PATH: skip parsing OpenRTB id to maximize QPS
+        final String openrtbId = ""; // (set to "" for throughput tests)
         final UUID reqUuid = UUID.randomUUID();
 
-        // Log request off the hot path
         publisher.publishRequest(reqUuid, openrtbId, tmaxMs, defaultFanout);
 
         if (immediateAck) {
-            // Fire-and-forget: do fanout on a virtual thread and return 204 now
             vexec.execute(() -> fanoutAndLog(reqUuid, body, tmaxMs));
             return ResponseEntity.noContent()
                     .header("X-Ack", "immediate")
                     .build();
         } else {
-            // Synchronous: issue fanout here and wait up to tmax, then 204
             final long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(tmaxMs);
             List<CompletableFuture<UpstreamResult>> calls = new ArrayList<>(defaultFanout);
 
@@ -106,7 +101,7 @@ public class OpenRtbController {
                             final int durMs = (int) TimeUnit.NANOSECONDS
                                     .toMillis(System.nanoTime() - start);
                             publisher.publishResponse(reqUuid, tgt.url, status, durMs, dropped, respBody);
-                            return res; // value not used further
+                            return res;
                         });
 
                 calls.add(cf);
@@ -114,7 +109,7 @@ public class OpenRtbController {
 
             try {
                 allDoneOrDeadline(calls, tmaxMs, TimeUnit.MILLISECONDS).join();
-            } catch (Exception ignored) { /* deadline or cancellation is fine */ }
+            } catch (Exception ignored) { }
 
             return ResponseEntity.noContent()
                     .header("X-Ack", "waited")
@@ -134,10 +129,7 @@ public class OpenRtbController {
                         final boolean dropped = (err != null);
                         final int status = dropped ? 0 : res.status();
                         final String respBody = dropped ? "" : res.body();
-
                         final int durMs = (int) TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
-
-                        // ✅ order: (uuid, target, status, durationMs, dropped, body)
                         publisher.publishResponse(reqUuid, tgt.url, status, durMs, dropped, respBody);
                         return null;
                     });
@@ -146,7 +138,6 @@ public class OpenRtbController {
 
     @GetMapping("/ping") public ResponseEntity<Void> ping(){ return ResponseEntity.noContent().build(); }
 
-    // shared helper (uses the shared DEADLINE_SCHED)
     private static CompletableFuture<Void> allDoneOrDeadline(
             List<CompletableFuture<UpstreamResult>> cfs, long time, TimeUnit unit) {
 
@@ -157,17 +148,13 @@ public class OpenRtbController {
         CompletableFuture<Void> all = CompletableFuture.allOf(arr);
         CompletableFuture<Void> timer = new CompletableFuture<>();
         DEADLINE_SCHED.schedule(() -> timer.complete(null), time, unit);
-
-        // Completes when either 'all' or the timer completes
         return all.applyToEither(timer, v -> null);
     }
 
     private static int quickTmax(byte[] body, int def) {
-        // naive fast scan: ..."tmax":123...
         int n = body.length;
         for (int i = 0; i < n - 6; i++) {
             if (body[i] == 't' && body[i+1]=='m' && body[i+2]=='a' && body[i+3]=='x') {
-                // seek ':' then digits
                 int j = i + 4;
                 while (j < n && body[j] != ':') j++;
                 j++;
@@ -183,8 +170,9 @@ public class OpenRtbController {
         return def;
     }
 
+    // kept for future use; not used on the hot path in this perf build
+    @SuppressWarnings("unused")
     private static String quickId(byte[] body) {
-        // trivial fallback: just parse with Jackson for id (rarely needed in hot path)
         try {
             JsonNode n = M.readTree(body);
             return n.has("id") ? n.get("id").asText("") : "";
@@ -192,5 +180,6 @@ public class OpenRtbController {
             return "";
         }
     }
+
     private record Target(String host, int port, String path, String url) {}
 }

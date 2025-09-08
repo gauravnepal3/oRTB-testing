@@ -5,21 +5,18 @@ services:
     image: apache/kafka:4.1.0
     container_name: kafka
     ports:
-      - "9094:9094"              # host port for CLI/tools; app uses internal 29092
+      - "9094:9094"
     environment:
-      # Single-node KRaft
       KAFKA_NODE_ID: "1"
       KAFKA_PROCESS_ROLES: "broker,controller"
       KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
-      # Bind 3 listeners: internal, external (for host), controller
       KAFKA_LISTENERS: "PLAINTEXT://:29092,EXTERNAL://:9094,CONTROLLER://:9093"
       KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:29092,EXTERNAL://localhost:9094"
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT"
       KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
       KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
-      KAFKA_CLUSTER_ID: "q1shixmKQ9O5aH3hRkJv3g" # any 22-char base64-ish string
+      KAFKA_CLUSTER_ID: "q1shixmKQ9O5aH3hRkJv3g"
       KAFKA_LOG_DIRS: "/var/lib/kafka/data"
-      # QoL
       KAFKA_NUM_PARTITIONS: "3"
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
@@ -27,22 +24,18 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     healthcheck:
-      # probe the INTERNAL listener; returns 0 when ready
       test: ["CMD-SHELL", "bash -lc 'bin/kafka-broker-api-versions.sh --bootstrap-server localhost:29092 >/dev/null 2>&1'"]
       interval: 10s
       timeout: 5s
       retries: 60
       start_period: 90s
-    volumes:
-      - kafka_data:/var/lib/kafka/data
+    volumes: [ "kafka_data:/var/lib/kafka/data" ]
     restart: unless-stopped
 
   clickhouse:
     image: clickhouse/clickhouse-server:head-alpine
     container_name: clickhouse
-    ports:
-      - "8123:8123"
-      - "9000:9000"
+    ports: [ "8123:8123", "9000:9000" ]
     environment:
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: topSecretPassword
@@ -53,8 +46,7 @@ services:
       timeout: 5s
       retries: 60
       start_period: 60s
-    volumes:
-      - clickhouse_data:/var/lib/clickhouse
+    volumes: [ "clickhouse_data:/var/lib/clickhouse" ]
     restart: unless-stopped
 
   rtb-app:
@@ -63,45 +55,37 @@ services:
       dockerfile: Dockerfile
     image: ortb-testing-app:latest
     container_name: rtb-app
-    ports:
-      - "8080:8080"
+    # If you want to talk to host bidders and host CH/Kafka via localhost:
     network_mode: "host"
     environment:
-      KAFKA_BOOTSTRAP: 127.0.0.1:9094     # <- external listener you published
-      CLICKHOUSE_URL: jdbc:ch://127.0.0.1:8123/default
-      EXTERNAL_TARGETS: "http://127.0.0.1:9100/bid,http://127.0.0.1:9101/bid,http://127.0.0.1:9102/bid,http://127.0.0.1:9103/bid,http://127.0.0.1:9104/bid"
-      # Spring relaxed binding → maps to your @Value keys
+      # Spring props
+      KAFKA_BOOTSTRAP: localhost:9094
       KAFKA_TOPIC_REQUESTS: rtb_requests
       KAFKA_TOPIC_RESPONSES: rtb_responses
       KAFKA_ACKS: "0"
       KAFKA_COMPRESSION: lz4
-      KAFKA_BATCHBYTES: "131072"
-      KAFKA_LINGERMS: "1"
+      KAFKA_BATCHBYTES: "524288"
+      KAFKA_LINGERMS: "5"
 
+      CLICKHOUSE_URL: jdbc:ch://localhost:8123/default
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: topSecretPassword
 
-      # Point to your separate Node bidders running on the host
+      EXTERNAL_TARGETS: "http://localhost:9100/bid,http://localhost:9101/bid,http://localhost:9102/bid,http://localhost:9103/bid,http://localhost:9104/bid"
       FANOUT_COUNT: "5"
       FANOUT_TOTALTIMEOUTMS: "300"
       AUCTION_IMMEDIATEACK: "true"
       SPRING_THREADS_VIRTUAL_ENABLED: "true"
 
-      # Netty / client tuning (system props)
-    # rtb-app environment
+      # Netty/system props (picked up by PooledHttpClient)
       JAVA_TOOL_OPTIONS: >-
         -Dnetty.pool.maxPerHost=4000
         -Dnetty.pool.maxPending=50000
         -Dnetty.pool.acquireTimeoutMs=150
-        -Dnetty.client.aggMaxBytes=262144
+        -Dnetty.client.aggMaxBytes=8192
         -Dnetty.connect.ms=100
-        -Dresp.max.bytes=65536
+        -Dresp.max.bytes=0
         -XX:+UseG1GC -XX:MaxGCPauseMillis=50
-    depends_on:
-      kafka:
-        condition: service_started
-      clickhouse:
-        condition: service_healthy
     restart: unless-stopped
 
 volumes:

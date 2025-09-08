@@ -1,4 +1,5 @@
 package com.gaurav.oRTB_testing;
+
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
@@ -7,13 +8,6 @@ import io.netty.channel.pool.ChannelPool;
 import io.netty.channel.pool.ChannelPoolHandler;
 import io.netty.channel.pool.FixedChannelPool;
 import io.netty.handler.codec.http.*;
-import io.netty.handler.codec.http.HttpHeaderNames;
-import io.netty.handler.codec.http.HttpHeaderValues;
-import io.netty.handler.codec.http.HttpMethod;
-import io.netty.handler.codec.http.HttpObjectAggregator;
-import io.netty.handler.codec.http.HttpVersion;
-import io.netty.handler.codec.http.HttpClientCodec;
-import io.netty.handler.codec.http.HttpContentDecompressor;
 import io.netty.util.AttributeKey;
 
 import java.nio.charset.StandardCharsets;
@@ -37,7 +31,7 @@ public class PooledHttpClient implements AutoCloseable {
 
     private static final class Pending {
         final CompletableFuture<UpstreamResult> cf;
-        volatile Thread killer; // virtual thread that enforces the deadline
+        volatile ScheduledFuture<?> killer; // scheduled on Netty event loop
         Pending(CompletableFuture<UpstreamResult> cf) { this.cf = cf; }
     }
 
@@ -45,12 +39,9 @@ public class PooledHttpClient implements AutoCloseable {
     private final class RespHandler extends SimpleChannelInboundHandler<FullHttpResponse> {
         @Override protected void channelRead0(ChannelHandlerContext ctx, FullHttpResponse msg) {
             Pending p = ctx.channel().attr(PENDING_KEY).getAndSet(null);
-            if (p == null) { // no pending → let it bubble (shouldn’t happen)
-                ctx.fireChannelRead(msg.retain());
-                return;
-            }
+            if (p == null) { ctx.fireChannelRead(msg.retain()); return; }
             try {
-                if (p.killer != null) p.killer.interrupt(); // cancel the deadline VT
+                if (p.killer != null) p.killer.cancel(false);
                 String body = "";
                 if (respMaxBytes > 0 && msg.content().isReadable()) {
                     int len = Math.min(respMaxBytes, msg.content().readableBytes());
@@ -58,14 +49,13 @@ public class PooledHttpClient implements AutoCloseable {
                 }
                 p.cf.complete(new UpstreamResult(msg.status().code(), body));
             } finally {
-                // channel release/close is handled in send()’s whenComplete
+                // channel release/close happens in send()’s whenComplete()
             }
         }
-
         @Override public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
             Pending p = ctx.channel().attr(PENDING_KEY).getAndSet(null);
             if (p != null && !p.cf.isDone()) {
-                if (p.killer != null) p.killer.interrupt();
+                if (p.killer != null) p.killer.cancel(false);
                 p.cf.completeExceptionally(cause);
             }
             ctx.close();
@@ -74,7 +64,6 @@ public class PooledHttpClient implements AutoCloseable {
 
     private final RespHandler sharedHandler = new RespHandler();
 
-    // Primary ctor (recommended)
     public PooledHttpClient(
             EventLoopGroup group, Class<? extends Channel> clientChannelClass,
             int respMaxBytes, int aggMaxBytes, int connectMs,
@@ -90,15 +79,15 @@ public class PooledHttpClient implements AutoCloseable {
         this.acquireTimeoutMs = acquireTimeoutMs;
     }
 
-    // Back-compat ctor
+    // Back-compat ctor (system properties)
     public PooledHttpClient(EventLoopGroup group, Class<? extends Channel> clientChannelClass) {
         this(group, clientChannelClass,
                 Integer.getInteger("resp.max.bytes", 0),
-                Integer.getInteger("netty.client.aggMaxBytes", 65536),
+                Integer.getInteger("netty.client.aggMaxBytes", 8192),
                 Integer.getInteger("netty.connect.ms", 80),
                 Integer.getInteger("netty.pool.maxPerHost", 4000),
                 Integer.getInteger("netty.pool.maxPending", 20000),
-                Long.getLong("netty.pool.acquireTimeoutMs", 2L));
+                Long.getLong("netty.pool.acquireTimeoutMs", 150L));
     }
 
     public CompletableFuture<UpstreamResult> get(String host, int port, String path,
@@ -129,28 +118,21 @@ public class PooledHttpClient implements AutoCloseable {
 
         pool.acquire().addListener((io.netty.util.concurrent.Future<Channel> acq) -> {
             if (!acq.isSuccess()) { cf.completeExceptionally(acq.cause()); return; }
-            final Channel ch = acq.getNow();           // effectively final
-            final Pending pending = new Pending(cf);   // effectively final
+            final Channel ch = acq.getNow();
+            final Pending pending = new Pending(cf);
             ch.attr(PENDING_KEY).set(pending);
 
             long leftNs = Math.max(0, deadlineNanos - System.nanoTime());
             long rawBudgetNs = Math.min(leftNs, perRequestTimeout.toNanos());
-            final long budgetNs = (rawBudgetNs > 0) ? rawBudgetNs : 1_000_000L; // <-- final
+            final long budgetNs = (rawBudgetNs > 0) ? rawBudgetNs : 1_000_000L; // ≥1ms
 
-            final Thread killer = Thread.ofVirtual().start(() -> {
-                try {
-                    long ms = budgetNs / 1_000_000L;
-                    int ns  = (int) (budgetNs % 1_000_000L);
-                    if (ms > 0) Thread.sleep(ms, ns); else Thread.sleep(0, ns);
-                    if (cf.isDone()) return;
-                    ch.eventLoop().execute(() -> {
-                        if (cf.isDone()) return;
-                        ch.attr(PENDING_KEY).set(null);
-                        cf.completeExceptionally(new TimeoutException("upstream deadline"));
-                        ch.close();
-                    });
-                } catch (InterruptedException ignore) { /* cancelled */ }
-            });
+            // schedule deadline on the same event loop (cheap)
+            final ScheduledFuture<?> killer = ch.eventLoop().schedule(() -> {
+                if (cf.isDone()) return;
+                ch.attr(PENDING_KEY).set(null);
+                cf.completeExceptionally(new TimeoutException("upstream deadline"));
+                ch.close();
+            }, budgetNs, TimeUnit.NANOSECONDS);
             pending.killer = killer;
 
             final FullHttpRequest req = isPost
@@ -164,18 +146,19 @@ public class PooledHttpClient implements AutoCloseable {
             }
             req.headers().set(HttpHeaderNames.HOST, host);
             req.headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.KEEP_ALIVE);
-            req.headers().set(HttpHeaderNames.ACCEPT_ENCODING, HttpHeaderValues.GZIP);
+            // do NOT ask for gzip; avoid decompression cost
+            req.headers().set(HttpHeaderNames.ACCEPT_ENCODING, "identity");
 
             ch.writeAndFlush(req).addListener(w -> {
                 if (!w.isSuccess()) {
                     ch.attr(PENDING_KEY).set(null);
-                    if (pending.killer != null) pending.killer.interrupt();
+                    if (pending.killer != null) pending.killer.cancel(false);
                     cf.completeExceptionally(w.cause());
                 }
             });
 
             cf.whenComplete((v, e) -> {
-                if (pending.killer != null) pending.killer.interrupt();
+                if (pending.killer != null) pending.killer.cancel(false);
                 if (ch.isActive()) pool.release(ch);
                 else { try { ch.close(); } catch (Exception ignore) {} }
             });
@@ -201,9 +184,9 @@ public class PooledHttpClient implements AutoCloseable {
                     @Override public void channelCreated(Channel ch) {
                         ChannelPipeline p = ch.pipeline();
                         p.addLast(new HttpClientCodec());
-                        p.addLast(new HttpContentDecompressor());      // handle gzip
-                        p.addLast(new HttpObjectAggregator(aggMaxBytes)); // cap body aggregation
-                        p.addLast(sharedHandler);                        // shared, @Sharable
+                        // no decompressor (we request identity)
+                        p.addLast(new HttpObjectAggregator(aggMaxBytes));
+                        p.addLast(sharedHandler);
                     }
                 },
                 ChannelHealthChecker.ACTIVE,
