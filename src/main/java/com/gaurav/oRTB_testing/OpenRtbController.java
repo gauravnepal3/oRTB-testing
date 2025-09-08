@@ -17,12 +17,11 @@ import java.util.concurrent.*;
 public class OpenRtbController {
     private static final ObjectMapper M = new ObjectMapper();
 
-    private final PooledHttpClient http;
-    private final List<Target> targets;
+    private final PooledHttpClient http;          // Netty client
+    private final List<Target> targets;           // host/port/path
     private final int defaultFanout;
     private final int totalTimeoutMs;
     private final NonBlockingKafkaPublisher publisher;
-
     private final ExecutorService vexec;
 
     @Value("${auction.immediateAck:true}")
@@ -70,17 +69,14 @@ public class OpenRtbController {
     @PostMapping(path = "/auction", consumes = "application/json")
     public ResponseEntity<Void> auction(@RequestBody byte[] body) {
         final int tmaxMs = quickTmax(body, totalTimeoutMs);
-        // HOT PATH: skip parsing OpenRTB id to maximize QPS
-        final String openrtbId = ""; // (set to "" for throughput tests)
+        final String openrtbId = quickId(body);
         final UUID reqUuid = UUID.randomUUID();
 
         publisher.publishRequest(reqUuid, openrtbId, tmaxMs, defaultFanout);
 
         if (immediateAck) {
             vexec.execute(() -> fanoutAndLog(reqUuid, body, tmaxMs));
-            return ResponseEntity.noContent()
-                    .header("X-Ack", "immediate")
-                    .build();
+            return ResponseEntity.noContent().header("X-Ack", "immediate").build();
         } else {
             final long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(tmaxMs);
             List<CompletableFuture<UpstreamResult>> calls = new ArrayList<>(defaultFanout);
@@ -90,64 +86,27 @@ public class OpenRtbController {
                 final long start = System.nanoTime();
                 int remainingMs = (int) Math.max(1,
                         TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime()));
-
                 CompletableFuture<UpstreamResult> cf = http
                         .postJson(tgt.host, tgt.port, tgt.path, body,
                                 Duration.ofMillis(remainingMs), deadlineNanos)
                         .handle((res, err) -> {
                             final boolean dropped = (err != null);
                             final int status = dropped ? 0 : res.status();
+                            final String respBody = dropped ? "" : res.body();
                             final int durMs = (int) TimeUnit.NANOSECONDS
                                     .toMillis(System.nanoTime() - start);
 
-                            final String respBody = dropped ? "" : res.body();
-                            // keep only id + took_ms to ClickHouse
-                            final String compact = dropped ? "" : extractIdAndTook(respBody);
+                            // Always publish a compact body (never empty)
+                            final String compact = buildCompact(respBody, durMs);
                             publisher.publishResponse(reqUuid, tgt.url, status, durMs, dropped, compact);
                             return res;
                         });
-
                 calls.add(cf);
             }
 
-            try {
-                allDoneOrDeadline(calls, tmaxMs, TimeUnit.MILLISECONDS).join();
-            } catch (Exception ignored) { }
-
-            return ResponseEntity.noContent()
-                    .header("X-Ack", "waited")
-                    .build();
+            try { allDoneOrDeadline(calls, tmaxMs, TimeUnit.MILLISECONDS).join(); } catch (Exception ignored) {}
+            return ResponseEntity.noContent().header("X-Ack", "waited").build();
         }
-    }
-    private static String extractIdAndTook(String s) {
-        if (s == null || s.isEmpty()) return "";
-        String id = fastString(s, "\"id\"");
-        int took = fastInt(s, "\"took_ms\"");
-        if (id == null && took < 0) return "";
-        StringBuilder sb = new StringBuilder(48).append('{');
-        boolean first = true;
-        if (id != null) { sb.append("\"id\":\"").append(id).append('"'); first = false; }
-        if (took >= 0) { if (!first) sb.append(','); sb.append("\"took_ms\":").append(took); }
-        sb.append('}');
-        return sb.toString();
-    }
-    private static String fastString(String s, String key) {
-        int i = s.indexOf(key); if (i < 0) return null;
-        i = s.indexOf(':', i); if (i < 0) return null; i++;
-        while (i < s.length() && Character.isWhitespace(s.charAt(i))) i++;
-        if (i >= s.length() || s.charAt(i) != '"') return null;
-        i++;
-        int j = i;
-        while (j < s.length() && s.charAt(j) != '"') j++;
-        return (j <= s.length()) ? s.substring(i, j) : null;
-    }
-    private static int fastInt(String s, String key) {
-        int i = s.indexOf(key); if (i < 0) return -1;
-        i = s.indexOf(':', i); if (i < 0) return -1; i++;
-        while (i < s.length() && !Character.isDigit(s.charAt(i))) i++;
-        int start = i, val = 0;
-        while (i < s.length() && Character.isDigit(s.charAt(i))) { val = val * 10 + (s.charAt(i) - '0'); i++; }
-        return (i == start) ? -1 : val;
     }
 
     private void fanoutAndLog(UUID reqUuid, byte[] body, int tmaxMs) {
@@ -163,21 +122,21 @@ public class OpenRtbController {
                         final int status = dropped ? 0 : res.status();
                         final String respBody = dropped ? "" : res.body();
                         final int durMs = (int) TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
-                        publisher.publishResponse(reqUuid, tgt.url, status, durMs, dropped, respBody);
+
+                        // Always compact; never empty
+                        final String compact = buildCompact(respBody, durMs);
+                        publisher.publishResponse(reqUuid, tgt.url, status, durMs, dropped, compact);
                         return null;
                     });
         }
     }
 
-    @GetMapping("/ping") public ResponseEntity<Void> ping(){ return ResponseEntity.noContent().build(); }
+    @GetMapping("/ping")
+    public ResponseEntity<Void> ping(){ return ResponseEntity.noContent().build(); }
 
     private static CompletableFuture<Void> allDoneOrDeadline(
             List<CompletableFuture<UpstreamResult>> cfs, long time, TimeUnit unit) {
-
-        CompletableFuture<?>[] arr = cfs.stream()
-                .map(f -> f.exceptionally(ex -> null))
-                .toArray(CompletableFuture[]::new);
-
+        CompletableFuture<?>[] arr = cfs.stream().map(f -> f.exceptionally(ex -> null)).toArray(CompletableFuture[]::new);
         CompletableFuture<Void> all = CompletableFuture.allOf(arr);
         CompletableFuture<Void> timer = new CompletableFuture<>();
         DEADLINE_SCHED.schedule(() -> timer.complete(null), time, unit);
@@ -203,15 +162,57 @@ public class OpenRtbController {
         return def;
     }
 
-    // kept for future use; not used on the hot path in this perf build
-    @SuppressWarnings("unused")
     private static String quickId(byte[] body) {
         try {
             JsonNode n = M.readTree(body);
             return n.has("id") ? n.get("id").asText("") : "";
-        } catch (Exception e) {
-            return "";
+        } catch (Exception e) { return ""; }
+    }
+
+    // ---------- Compact body helpers (robust, never empty) ----------
+    private static String buildCompact(String body, int measuredMs) {
+        // Attempt to extract upstream "id" and "took_ms"
+        String id = fastString(body, "\"id\"");
+        int took = fastInt(body, "\"took_ms\"");
+        if (id == null && took < 0) {
+            // Fallback to measured duration; ensures a non-empty payload
+            return "{\"id\":\"\",\"took_ms\":" + measuredMs + "}";
         }
+        StringBuilder sb = new StringBuilder(64).append('{');
+        boolean first = true;
+        if (id != null) { sb.append("\"id\":\"").append(escapeJson(id)).append('"'); first = false; }
+        if (took >= 0) { if (!first) sb.append(','); sb.append("\"took_ms\":").append(took); first = false; }
+        // if upstream lacks took_ms, add measured as fallback field
+        if (took < 0) { if (!first) sb.append(','); sb.append("\"measured_ms\":").append(measuredMs); }
+        sb.append('}');
+        return sb.toString();
+    }
+
+    private static String escapeJson(String s) {
+        // minimal escape for quotes/backslashes (id is UUID; this is defensive)
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private static String fastString(String s, String key) {
+        if (s == null || s.isEmpty()) return null;
+        int i = s.indexOf(key); if (i < 0) return null;
+        i = s.indexOf(':', i); if (i < 0) return null; i++;
+        while (i < s.length() && Character.isWhitespace(s.charAt(i))) i++;
+        if (i >= s.length() || s.charAt(i) != '"') return null;
+        i++;
+        int j = i;
+        while (j < s.length() && s.charAt(j) != '"') j++;
+        return (j <= s.length()) ? s.substring(i, j) : null;
+    }
+
+    private static int fastInt(String s, String key) {
+        if (s == null || s.isEmpty()) return -1;
+        int i = s.indexOf(key); if (i < 0) return -1;
+        i = s.indexOf(':', i); if (i < 0) return -1; i++;
+        while (i < s.length() && !Character.isDigit(s.charAt(i))) i++;
+        int start = i, val = 0;
+        while (i < s.length() && Character.isDigit(s.charAt(i))) { val = val * 10 + (s.charAt(i) - '0'); i++; }
+        return (i == start) ? -1 : val;
     }
 
     private record Target(String host, int port, String path, String url) {}

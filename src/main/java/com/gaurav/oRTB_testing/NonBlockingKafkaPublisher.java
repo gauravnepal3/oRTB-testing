@@ -1,4 +1,3 @@
-// NonBlockingKafkaPublisher.java
 package com.gaurav.oRTB_testing;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -30,9 +29,9 @@ public class NonBlockingKafkaPublisher {
             @Value("${kafka.topic.requests:rtb_requests}") String topicReq,
             @Value("${kafka.topic.responses:rtb_responses}") String topicResp,
             @Value("${kafka.compression:lz4}") String compression,
-            @Value("${kafka.lingerMs:1}") int lingerMs,
-            @Value("${kafka.batchBytes:131072}") int batchBytes,
-            @Value("${resp.max.bytes:65536}") int respMaxBytes
+            @Value("${kafka.lingerMs:5}") int lingerMs,
+            @Value("${kafka.batchBytes:524288}") int batchBytes,
+            @Value("${resp.max.bytes:256}") int respMaxBytes
     ) {
         this.bootstrap = bootstrap;
         this.topicReq = topicReq;
@@ -49,11 +48,12 @@ public class NonBlockingKafkaPublisher {
         p.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
         p.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer");
         p.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer");
-        p.put(ProducerConfig.ACKS_CONFIG, "0"); // fire-and-forget
+        p.put(ProducerConfig.ACKS_CONFIG, "0");
         p.put(ProducerConfig.LINGER_MS_CONFIG, lingerMs);
         p.put(ProducerConfig.BATCH_SIZE_CONFIG, batchBytes);
         p.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, compression);
         producer = new KafkaProducer<>(p);
+        System.out.println("[PUB] resp.max.bytes (trim limit) = " + this.respMaxBytes);
     }
 
     public void publishRequest(UUID reqUuid, String openrtbId, int tmax, int fanout) {
@@ -69,11 +69,9 @@ public class NonBlockingKafkaPublisher {
         } catch (Exception ignore) {}
     }
 
-    // inside publishResponse(...)
     public void publishResponse(UUID reqUuid, String target, int status, int durationMs, boolean dropped, String body) {
         try {
-            final int limit = this.respMaxBytes; // Spring property
-            // If limit <= 0 → don't trim at all (keeps body)
+            final int limit = this.respMaxBytes;
             final String trimmed = (body == null) ? "" :
                     (limit > 0 && body.length() > limit ? body.substring(0, limit) : body);
 
