@@ -74,7 +74,7 @@ services:
       CLICKHOUSE_PASSWORD: topSecretPassword
 
       # Bidders on your HOST (not compose)
-      EXTERNAL_TARGETS: "http://host.docker.internal:9100/bid,http://host.docker.internal:9101/bid,http://host.docker.internal:9102/bid,http://host.docker.internal:9103/bid,http://host.docker.internal:9104/bid"
+      EXTERNAL_TARGETS: "http://localhost:9100/bid,http://localhost:9101/bid,http://localhost:9102/bid,http://localhost:9103/bid,http://localhost:9104/bid,http://localhost:9100/bid,http://localhost:9101/bid,http://localhost:9102/bid,http://localhost:9103/bid,http://localhost:9104/bid"
 
       # Fanout size and a hard cap of concurrent *in-flight* fanouts
       FANOUT_COUNT: "10"                # if you want 10; reuse ports by repeating in EXTERNAL_TARGETS if needed
