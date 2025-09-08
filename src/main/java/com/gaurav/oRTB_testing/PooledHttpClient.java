@@ -189,11 +189,14 @@ public class PooledHttpClient implements AutoCloseable {
                     @Override public void channelReleased(Channel ch) { }
                     @Override public void channelAcquired(Channel ch) { }
                     @Override public void channelCreated(Channel ch) {
+                        // inside channelCreated(...)
                         ChannelPipeline p = ch.pipeline();
                         p.addLast(new HttpClientCodec());
-                        p.addLast(new HttpContentDecompressor());
-                        p.addLast(new HttpObjectAggregator(aggMaxBytes)); // keep small
+                        // REMOVE decompressor to avoid inflating memory for tiny bodies
+// p.addLast(new HttpContentDecompressor());
+                        p.addLast(new HttpObjectAggregator(aggMaxBytes));
                         p.addLast(sharedHandler);
+
                     }
                 },
                 ChannelHealthChecker.ACTIVE,

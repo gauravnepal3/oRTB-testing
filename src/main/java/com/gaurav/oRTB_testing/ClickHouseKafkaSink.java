@@ -74,8 +74,9 @@ public class ClickHouseKafkaSink {
         p.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
         // use 'latest' so we only consume what is produced after the app starts
         p.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
-        p.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, "1000");
+        p.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, "200");
         p.put(ConsumerConfig.FETCH_MIN_BYTES_CONFIG, "1");
+        p.put(ConsumerConfig.MAX_PARTITION_FETCH_BYTES_CONFIG, "262144"); // 256 KB
         consumer = new KafkaConsumer<>(p);
         consumer.subscribe(List.of(topicReq, topicResp));
         running.set(true);

@@ -14,22 +14,20 @@ public class NettyClientConfig {
 
     @Bean(destroyMethod = "shutdownGracefully")
     public EventLoopGroup clientGroup() {
-        if (Epoll.isAvailable()) return new EpollEventLoopGroup();
-        return new NioEventLoopGroup();
+        return Epoll.isAvailable() ? new EpollEventLoopGroup() : new NioEventLoopGroup();
     }
 
     @Bean(destroyMethod = "close")
     public PooledHttpClient pooledHttpClient(EventLoopGroup clientGroup) {
-        Class<? extends io.netty.channel.Channel> ch =
-                Epoll.isAvailable() ? EpollSocketChannel.class : NioSocketChannel.class;
+        Class<? extends io.netty.channel.Channel> ch = Epoll.isAvailable() ? EpollSocketChannel.class : NioSocketChannel.class;
 
         return new PooledHttpClient(
                 clientGroup, ch,
-                Integer.getInteger("resp.max.bytes", 256),     // tiny capture
+                Integer.getInteger("resp.max.bytes", 256),
                 Integer.getInteger("netty.client.aggMaxBytes", 4096),
                 Integer.getInteger("netty.connect.ms", 60),
                 Integer.getInteger("netty.pool.maxPerHost", 200),
-                Integer.getInteger("netty.pool.maxPending", 1000),
+                Integer.getInteger("netty.pool.maxPending", 800),
                 Long.getLong("netty.pool.acquireTimeoutMs", 50)
         );
     }
