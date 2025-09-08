@@ -80,20 +80,21 @@ services:
       CLICKHOUSE_PASSWORD: topSecretPassword
 
       # Point to your separate Node bidders running on the host
-      EXTERNAL_TARGETS: "http://host.docker.internal:9100/bid,http://host.docker.internal:9101/bid,http://host.docker.internal:9102/bid,http://host.docker.internal:9103/bid,http://host.docker.internal:9104/bid"
+      EXTERNAL_TARGETS: "http://localhost:9100/bid,http://localhost:9101/bid,http://localhost:9102/bid,http://localhost:9103/bid,http://localhost:9104/bid"
       FANOUT_COUNT: "5"
       FANOUT_TOTALTIMEOUTMS: "300"
       AUCTION_IMMEDIATEACK: "true"
       SPRING_THREADS_VIRTUAL_ENABLED: "true"
 
       # Netty / client tuning (system props)
+    # rtb-app environment
       JAVA_TOOL_OPTIONS: >-
         -Dnetty.pool.maxPerHost=4000
-        -Dnetty.pool.maxPending=20000
-        -Dnetty.pool.acquireTimeoutMs=2
-        -Dnetty.client.aggMaxBytes=65536
-        -Dnetty.connect.ms=80
-        -Dresp.max.bytes=2048
+        -Dnetty.pool.maxPending=50000
+        -Dnetty.pool.acquireTimeoutMs=150   # ⬅️ was 2; make 150–200
+        -Dnetty.client.aggMaxBytes=262144
+        -Dnetty.connect.ms=100
+        -Dresp.max.bytes=65536
         -XX:+UseG1GC -XX:MaxGCPauseMillis=50
     depends_on:
       kafka:
