@@ -65,9 +65,12 @@ services:
     container_name: rtb-app
     ports:
       - "8080:8080"
+    network_mode: "host"
     environment:
+      KAFKA_BOOTSTRAP: 127.0.0.1:9094     # <- external listener you published
+      CLICKHOUSE_URL: jdbc:ch://127.0.0.1:8123/default
+      EXTERNAL_TARGETS: "http://127.0.0.1:9100/bid,http://127.0.0.1:9101/bid,http://127.0.0.1:9102/bid,http://127.0.0.1:9103/bid,http://127.0.0.1:9104/bid"
       # Spring relaxed binding → maps to your @Value keys
-      KAFKA_BOOTSTRAP: kafka:29092
       KAFKA_TOPIC_REQUESTS: rtb_requests
       KAFKA_TOPIC_RESPONSES: rtb_responses
       KAFKA_ACKS: "0"
@@ -75,12 +78,10 @@ services:
       KAFKA_BATCHBYTES: "131072"
       KAFKA_LINGERMS: "1"
 
-      CLICKHOUSE_URL: jdbc:ch://clickhouse:8123/default
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: topSecretPassword
 
       # Point to your separate Node bidders running on the host
-      EXTERNAL_TARGETS: "http://localhost:9100/bid,http://localhost:9101/bid,http://localhost:9102/bid,http://localhost:9103/bid,http://localhost:9104/bid"
       FANOUT_COUNT: "5"
       FANOUT_TOTALTIMEOUTMS: "300"
       AUCTION_IMMEDIATEACK: "true"
