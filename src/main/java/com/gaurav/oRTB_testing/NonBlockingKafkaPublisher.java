@@ -69,10 +69,14 @@ public class NonBlockingKafkaPublisher {
         } catch (Exception ignore) {}
     }
 
+    // inside publishResponse(...)
     public void publishResponse(UUID reqUuid, String target, int status, int durationMs, boolean dropped, String body) {
         try {
-            String trimmed = body == null ? "" :
-                    (body.length() <= respMaxBytes ? body : body.substring(0, respMaxBytes));
+            final int limit = this.respMaxBytes; // Spring property
+            // If limit <= 0 → don't trim at all (keeps body)
+            final String trimmed = (body == null) ? "" :
+                    (limit > 0 && body.length() > limit ? body.substring(0, limit) : body);
+
             String json = M.writeValueAsString(Map.of(
                     "ts", System.currentTimeMillis(),
                     "req_uuid", reqUuid.toString(),

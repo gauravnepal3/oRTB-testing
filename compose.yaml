@@ -84,7 +84,7 @@ services:
         -Dnetty.pool.acquireTimeoutMs=150
         -Dnetty.client.aggMaxBytes=8192
         -Dnetty.connect.ms=100
-        -Dresp.max.bytes=0
+        -Dresp.max.bytes=256
         -XX:+UseG1GC -XX:MaxGCPauseMillis=50
     restart: unless-stopped
 

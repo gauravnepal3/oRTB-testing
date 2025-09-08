@@ -77,6 +77,8 @@ public class PooledHttpClient implements AutoCloseable {
         this.maxPerHost = maxPerHost;
         this.maxPending = maxPending;
         this.acquireTimeoutMs = acquireTimeoutMs;
+
+        System.out.println("[HTTP] resp.max.bytes (capture limit) = " + this.respMaxBytes);
     }
 
     // Back-compat ctor (system properties)
