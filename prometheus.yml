@@ -2,4 +2,4 @@ scrape_configs:
   - job_name: 'rtb-app'
     metrics_path: /actuator/prometheus
     static_configs:
-      - targets: ['host.docker.internal:8080']   # or :8081 if you set management.port
+      - targets: ['localhost:8080']   # or rtb-app:8080 if both in docker-compose

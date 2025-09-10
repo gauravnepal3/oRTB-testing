@@ -64,7 +64,6 @@ services:
     container_name: rtb-app
     ports:
       - "8080:8080"
-      - "8081:8081"
     network_mode: "host"
     # DO NOT use host network on Mac
     environment:
