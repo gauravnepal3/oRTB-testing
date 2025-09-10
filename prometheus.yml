@@ -1,7 +1,7 @@
 global:
   scrape_interval: 15s           # keep sane default
   evaluation_interval: 15s
-
+#Changes
 scrape_configs:
   - job_name: 'rtb-app'
     scrape_interval: 1s          # <-- 1s just for this job
