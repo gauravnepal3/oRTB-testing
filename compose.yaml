@@ -2,12 +2,12 @@ version: "3.9"
 
 services:
   prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
+    image: prom/prometheus
+    ports: [ "9090:9090" ]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # Linux host-gateway mapping
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    ports:
-      - "9090:9090"
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
   kafka:
     image: apache/kafka:4.1.0
     container_name: kafka
@@ -69,7 +69,7 @@ services:
     # DO NOT use host network on Mac
     environment:
       # Talk to sibling containers by service name
-      MANAGEMENT_SERVER_PORT: "8081"
+      MANAGEMENT_SERVER_PORT: "8080"
       MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "prometheus,health,info"
       MANAGEMENT_ENDPOINT_PROMETHEUS_ENABLED: "true"
       MANAGEMENT_SERVER_ADDRESS: "0.0.0.0"

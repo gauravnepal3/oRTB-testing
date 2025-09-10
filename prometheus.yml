@@ -1,7 +1,5 @@
-global:
-  scrape_interval: 1s
 scrape_configs:
   - job_name: 'rtb-app'
     metrics_path: /actuator/prometheus
     static_configs:
-      - targets: ['localhost:8081']   # if Prometheus runs on the same host
+      - targets: ['host.docker.internal:8080']   # or :8081 if you set management.port
