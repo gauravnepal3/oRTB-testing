@@ -69,6 +69,10 @@ services:
     # DO NOT use host network on Mac
     environment:
       # Talk to sibling containers by service name
+      MANAGEMENT_SERVER_PORT: "8081"
+      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "prometheus,health,info"
+      MANAGEMENT_ENDPOINT_PROMETHEUS_ENABLED: "true"
+      MANAGEMENT_SERVER_ADDRESS: "0.0.0.0"
       KAFKA_BOOTSTRAP: localhost:9094
       KAFKA_TOPIC_REQUESTS: rtb_requests
       KAFKA_TOPIC_RESPONSES: rtb_responses
