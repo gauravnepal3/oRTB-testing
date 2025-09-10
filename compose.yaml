@@ -1,6 +1,13 @@
 version: "3.9"
 
 services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
   kafka:
     image: apache/kafka:4.1.0
     container_name: kafka
@@ -57,6 +64,7 @@ services:
     container_name: rtb-app
     ports:
       - "8080:8080"
+      - "8081:8081"
     network_mode: "host"
     # DO NOT use host network on Mac
     environment:
