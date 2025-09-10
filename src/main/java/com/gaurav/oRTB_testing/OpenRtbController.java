@@ -98,6 +98,7 @@ public class OpenRtbController {
     public ResponseEntity<Void> auction(@RequestBody byte[] body) {
         // Record incoming request (optional; http.server.requests is also available)
         meter.counter(METRIC_IN_REQS).increment();
+        meter.counter("rtb_incoming_requests_total", "route", "auction").increment();
 
         final int tmaxMs = quickTmax(body, totalTimeoutMs);
         final String openrtbId = quickId(body);
@@ -156,10 +157,15 @@ public class OpenRtbController {
                 .whenComplete((__, ___) -> FANOUT_SEM.release());
     }
 
+
+
     private void recordOutgoingMetrics(String targetUrl, boolean dropped, int status, int durMs) {
         String outcome = dropped ? "dropped" : (status >= 200 && status < 400 ? "ok" : "error");
         Tags tags = Tags.of("target", targetUrl, "outcome", outcome);
         meter.counter(METRIC_OUT_REQS, tags).increment();
+        meter.counter("rtb_outgoing_requests_total", "target", targetUrl, "outcome", outcome).increment();
+        meter.timer("rtb_outgoing_duration_seconds", "target", targetUrl, "outcome", outcome)
+                .record(durMs, TimeUnit.MILLISECONDS);
         if (!dropped) {
             meter.timer(METRIC_OUT_LATENCY, tags).record(durMs, TimeUnit.MILLISECONDS);
         }

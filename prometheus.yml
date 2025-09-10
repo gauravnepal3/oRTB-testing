@@ -1,12 +1,6 @@
-global:
-  scrape_interval: 15s           # keep sane default
-  evaluation_interval: 15s
-#Changes
 scrape_configs:
-  - job_name: 'rtb-app'
-    scrape_interval: 1s          # <-- 1s just for this job
-    scrape_timeout: 800ms         # must be < scrape_interval
-    metrics_path: /actuator/prometheus
+  - job_name: rtb-app
+    scrape_interval: 1s
+    scrape_timeout: 800ms
     static_configs:
-      - targets:
-          - 5.161.119.247:8080    # or whatever host:port serves your app
+      - targets: ['5.161.119.247:8080']   # your actuator/prometheus endpoint host:port
