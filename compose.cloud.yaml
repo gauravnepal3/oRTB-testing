@@ -1,0 +1,15 @@
+services:
+  rtb-app:
+    container_name: "rtb_app"
+    network_mode: "host"
+    # no ports mapping needed on host network
+    environment:
+      KAFKA_BOOTSTRAP: localhost:9094
+      CLICKHOUSE_URL: jdbc:ch://localhost:8123/default?async_insert=1&wait_for_async_insert=0&compress=1&decompress=1&socket_timeout=5000&connection_timeout=3000
+      EXTERNAL_TARGETS: "http://localhost:9100/bid,http://localhost:9101/bid,http://localhost:9102/bid,http://localhost:9103/bid,http://localhost:9104/bid"
+
+  prometheus:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
