@@ -65,7 +65,7 @@ services:
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: topSecretPassword
 
-      FANOUT_COUNT: "5"
+      FANOUT_COUNT: "1"
       FANOUT_MAX_INFLIGHT: "1800"
       AUCTION_IMMEDIATEACK: "true"
       SPRING_THREADS_VIRTUAL_ENABLED: "true"
