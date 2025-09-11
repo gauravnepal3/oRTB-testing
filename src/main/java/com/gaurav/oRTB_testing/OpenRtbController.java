@@ -13,7 +13,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.LongAdder;
 
 @RestController
 @RequestMapping("/openrtb2")
@@ -37,11 +37,17 @@ public class OpenRtbController {
                     Integer.parseInt(System.getenv().getOrDefault("FANOUT_MAX_INFLIGHT", "1800")));
     private static final Semaphore FANOUT_SEM = new Semaphore(Math.max(100, MAX_INFLIGHT));
 
-    // ---- Metrics names ----
+    // ---- Metrics names (counters/timers you already use) ----
     private static final String METRIC_OUT_REQS     = "rtb.outgoing.requests";
     private static final String METRIC_OUT_LATENCY  = "rtb.outgoing.latency";
     private static final String METRIC_OUT_INFLIGHT = "rtb.outgoing.inflight";
     private static final String METRIC_IN_REQS      = "rtb.incoming.auction.requests";
+
+    // ---- Live RPS calculators (instant-ish gauges) ----
+    private final RollingRps inbound1s  = new RollingRps(1);
+    private final RollingRps inbound5s  = new RollingRps(5);
+    private final RollingRps outgoing1s = new RollingRps(1);
+    private final RollingRps outgoing5s = new RollingRps(5);
 
     public OpenRtbController(
             @Qualifier("vthreadExecutor") ExecutorService vexec,
@@ -78,9 +84,14 @@ public class OpenRtbController {
         }
         this.targets = Collections.unmodifiableList(t);
 
-        // Register an inflight gauge (computed from the semaphore)
-        // Shows current number of busy permits (i.e., active upstream calls)
+        // Inflight gauge
         meter.gauge(METRIC_OUT_INFLIGHT, Tags.empty(), this, OpenRtbController::currentInflight);
+
+        // Live RPS gauges (Micrometer will export with dots->underscores in Prometheus)
+        meter.gauge("rtb.live.inbound.rps.1s",  Tags.empty(), inbound1s,  RollingRps::perSecond);
+        meter.gauge("rtb.live.inbound.rps.5s",  Tags.empty(), inbound5s,  RollingRps::perSecond);
+        meter.gauge("rtb.live.outgoing.rps.1s", Tags.empty(), outgoing1s, RollingRps::perSecond);
+        meter.gauge("rtb.live.outgoing.rps.5s", Tags.empty(), outgoing5s, RollingRps::perSecond);
     }
 
     // Current number of in-flight upstream requests
@@ -96,7 +107,10 @@ public class OpenRtbController {
 
     @PostMapping(path = "/auction", consumes = "application/json")
     public ResponseEntity<Void> auction(@RequestBody byte[] body) {
+        // Increment counters AND live RPS ring
         meter.counter(METRIC_IN_REQS, Tags.of("route", "auction")).increment();
+        inbound1s.mark();
+        inbound5s.mark();
 
         final int tmaxMs = quickTmax(body, totalTimeoutMs);
         final String openrtbId = quickId(body);
@@ -106,11 +120,9 @@ public class OpenRtbController {
         publisher.publishRequest(reqUuid, openrtbId, tmaxMs, defaultFanout);
 
         if (immediateAck) {
-            // Fire-and-forget fanout
             vexec.execute(() -> fanoutAndLog(reqUuid, body, tmaxMs));
             return ResponseEntity.noContent().header("X-Ack", "immediate").build();
         } else {
-            // Synchronous: wait up to tmax for fanout to complete
             final long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(tmaxMs);
             List<CompletableFuture<UpstreamResult>> calls = new ArrayList<>(defaultFanout);
             for (int i = 0; i < defaultFanout; i++) {
@@ -135,6 +147,9 @@ public class OpenRtbController {
         if (!FANOUT_SEM.tryAcquire()) {
             publisher.publishResponse(reqUuid, tgt.url, 0, 0, true, "");
             recordOutgoingMetrics(tgt.url, true, 0, 0);
+            // mark live outgoing counter too (a call attempt happened)
+            outgoing1s.mark();
+            outgoing5s.mark();
             return CompletableFuture.completedFuture(null);
         }
 
@@ -145,23 +160,25 @@ public class OpenRtbController {
                 .handle((res, err) -> {
                     final boolean dropped = (err != null);
                     final int status = dropped ? 0 : res.status();
-                    final String respBody = dropped ? "" : res.body();  // body captured (truncated by resp.max.bytes if configured)
+                    final String respBody = dropped ? "" : res.body();
                     final int durMs = (int) TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
 
                     publisher.publishResponse(reqUuid, tgt.url, status, durMs, dropped, respBody);
                     recordOutgoingMetrics(tgt.url, dropped, status, durMs);
+
+                    // live outgoing RPS mark (count every upstream attempt)
+                    outgoing1s.mark();
+                    outgoing5s.mark();
                     return res;
                 })
                 .whenComplete((__, ___) -> FANOUT_SEM.release());
     }
 
-
-
     private void recordOutgoingMetrics(String targetUrl, boolean dropped, int status, int durMs) {
         String outcome = dropped ? "dropped" : (status >= 200 && status < 400 ? "ok" : "error");
         Tags tags = Tags.of("target", targetUrl, "outcome", outcome);
         meter.counter(METRIC_OUT_REQS, tags).increment();
-        // AFTER (single timer, dotted base name)
+        // one timer (dotted name) for duration distribution
         meter.timer("rtb.outgoing.duration", "target", targetUrl, "outcome", outcome)
                 .record(durMs, TimeUnit.MILLISECONDS);
     }
@@ -184,7 +201,6 @@ public class OpenRtbController {
     }
 
     private static int quickTmax(byte[] body, int def) {
-        // naive fast scan: ..."tmax":123...
         int n = body.length;
         for (int i = 0; i < n - 6; i++) {
             if (body[i]=='t' && body[i+1]=='m' && body[i+2]=='a' && body[i+3]=='x') {
@@ -209,4 +225,65 @@ public class OpenRtbController {
     }
 
     private record Target(String host, int port, String path, String url) {}
+
+    /**
+     * Rolling per-second counter over a small sliding window (N seconds).
+     * - mark(): record one event at "now"
+     * - perSecond(): return average RPS over the last N seconds (for N=1, it's the last second bucket)
+     *
+     * Lock-free fast path using epoch-second bucketing; advancing is synchronized only when we cross seconds.
+     */
+    static final class RollingRps {
+        private final int windowSec;
+        private final LongAdder[] buckets;
+        private volatile long headSec; // epoch second of current head bucket
+        private volatile int headIdx;  // index of current head bucket
+        private final Object advanceLock = new Object();
+
+        RollingRps(int windowSec) {
+            if (windowSec < 1) throw new IllegalArgumentException("windowSec must be >= 1");
+            this.windowSec = windowSec;
+            this.buckets = new LongAdder[windowSec];
+            for (int i = 0; i < windowSec; i++) buckets[i] = new LongAdder();
+            long now = currentSec();
+            this.headSec = now;
+            this.headIdx = 0;
+        }
+
+        void mark() {
+            long now = currentSec();
+            advance(now);
+            buckets[headIdx].increment();
+        }
+
+        double perSecond() {
+            long now = currentSec();
+            advance(now); // ensure buckets are up to date
+            long sum = 0;
+            for (int i = 0; i < windowSec; i++) sum += buckets[i].sum();
+            // average per second across the window
+            return (double) sum / (double) windowSec;
+        }
+
+        private static long currentSec() {
+            return System.currentTimeMillis() / 1000L;
+            // Alternatively for lower overhead: TimeUnit.NANOSECONDS.toSeconds(System.nanoTime()) with an epoch offset
+        }
+
+        private void advance(long nowSec) {
+            long delta = nowSec - headSec;
+            if (delta <= 0) return; // same second
+            // We crossed one or more seconds; rotate buckets
+            synchronized (advanceLock) {
+                long d = nowSec - headSec;
+                if (d <= 0) return;
+                int steps = (int) Math.min(d, windowSec); // don't rotate more than window size
+                for (int i = 0; i < steps; i++) {
+                    headIdx = (headIdx + 1) % windowSec;
+                    buckets[headIdx] = new LongAdder(); // reset bucket we’re rotating into
+                }
+                headSec = nowSec;
+            }
+        }
+    }
 }

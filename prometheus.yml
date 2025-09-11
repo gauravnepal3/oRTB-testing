@@ -3,4 +3,4 @@ scrape_configs:
     scrape_interval: 1s
     scrape_timeout: 800ms
     static_configs:
-      - targets: ['5.161.119.247:8080']   # your actuator/prometheus endpoint host:port
+      - targets: ['45.79.159.18:8080']   # your actuator/prometheus endpoint host:port
